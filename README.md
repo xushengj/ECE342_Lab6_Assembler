@@ -6,6 +6,7 @@ This is a small assembler for ECE342 Lab6 processor. It reads plain text assembl
 The processor is 16 bits, and the instructions are 9 bits wide. By default the instruction is in the upper 9 bits of 16bit word. The width of mif file is hardcoded as 16 bits.
 
 The processor supports following instructions:
+
 | Mnemonic, Argument1, Argument2 | Effect |
 | :--- | :--- |
 | mv   Rx, Ry	 | Rx=Ry |
@@ -17,6 +18,7 @@ The processor supports following instructions:
 | mvnz Rx, Ry    | Rx=Ry if last add/sub gives non-zero result |
 
 Instructions will be in the form of IIIXXXYYY0000000, where:
+
 | Field | Description |
 | :--- | :--- |
 | III | the opcode for instruction |
@@ -24,6 +26,7 @@ Instructions will be in the form of IIIXXXYYY0000000, where:
 | YYY | the operand Ry. Zero if the second operand is Imm16 |
 
 opcode for each instruction:
+
 | Mnemonic | Opcode |
 | :--- | :--- |
 | mv | 000 |
