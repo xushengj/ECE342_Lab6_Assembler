@@ -613,7 +613,7 @@ int process(unsigned depth,unsigned width){
 			std::cout<<"-- Label \""<<iter_labelComment->first<<"\":\n";
 			++iter_labelComment;
 		}
-		std::cout<<std::setw(address_width)<<i<<"\t:\t"<<std::setw(data_width)<<assembly[i]<<';';
+		std::cout<<std::setw(address_width)<<i<<"\t:\t"<<std::setw(data_width)<<(assembly_max&(assembly[i]))<<';';
 		if(!(comment_code[i].empty())){
 			std::cout<<"\t-- "<<comment_code[i];
 		}

@@ -38,13 +38,15 @@ opcode for each instruction:
 | mvnz | 110 |
 
 This assembler supports labels (mark the address of next instruction / data) and constants (evaluated in the first pass).
-- To define a label: use "`<labelname>:`". Label name should not appear on the same line after a valid instruction.
-- To define a constant: use "`#define <Name> <ConstantExpression>`".
-- To hardcode a data: use "`#data <ImmediateExpression>`"
+- To define a label: use `<labelname>:`. Label name should not appear on the same line after a valid instruction.
+- To define a constant: use `#define <Name> <ConstantExpression>`
+- To hardcode a data: use `#data <ImmediateExpression>`
 
 All evaluation of expressions support addition and subtraction (e.g. "mvi R0,ADDRESS+1" where ADDRESS is a constant or label), but a label cannot be subtracted. ImmediateExpression can have at most one dependency on label (e.g. you cannot have "mvi R0, ADDRESS_END-ADDRESS_BEGIN"), and ConstantExpression cannot have dependency on label (they should have determinable value when program see it).
 
-** Avoid spaces inside a single expression (e.g. Do not write "ADDRESS + 1"; write it as "ADDRESS+1") **
+** Avoid spaces inside a single expression (e.g. Do not write `ADDRESS + 1`; write it as `ADDRESS+1`) **
+
+Also, check your processor implementation if you want to use something like `mvi R7, LOOP_BEGIN`. Make sure R7(PC) have the correct value in this case.
 
 Feel free to modify the program to fit your case. Thank you!
 
