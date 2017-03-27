@@ -428,8 +428,10 @@ int process(unsigned depth,unsigned width){
 				std::string codeComment=instr;
 				codeComment+='\t';
 				codeComment+=arg1;
-				codeComment+=",\t";
-				codeComment+=arg2;
+				if(!(arg2.empty())){
+					codeComment+=",\t";
+					codeComment+=arg2;
+				}
 				comment_code.push_back(codeComment);
 				
 				switch(iter_instr->second){
@@ -513,6 +515,9 @@ int process(unsigned depth,unsigned width){
 						}
 					}break;
 					case INSTR_DATA:{
+						if(!(arg2.empty())){
+							std::cerr<<"Warning: at line "<<lineCount<<": ignoring unexpected extra argument \""<<arg2<<'"'<<std::endl;
+						}
 						content_type immediate=0;
 						offset_type offset=0;
 						std::string label;
