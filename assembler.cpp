@@ -2,7 +2,7 @@
 
 /*
 ECE342 Lab6 Assembler
-command line argument: optional DEPTH (number of words in total)
+command line argument: optional DEPTH (number of words in total); optional inputFileName
 width is hardcoded to be 16
 encoding is hardcoded according to lab6 document; IR is assumed to use upper 9 bits from DIN
 
@@ -103,6 +103,7 @@ constexpr unsigned OFFSET_RY				=OFFSET_RIGHT_PADDING;
 constexpr unsigned long long PADD_NOOP=0;
 
 const std::string INSTR_DEFINE_CONSTANT=INSTR_DEFINE_CONSTANT_STR;
+const std::string OPTION_DEPTH="__DEPTH__";
 
 const std::unordered_map<std::string,content_type> OPCODE_MAP={
 		{"#data",INSTR_DATA},//use it if you want to store constants in ROM
@@ -389,6 +390,7 @@ bool convert2Value_Expression(const std::string& arg, content_type& result,offse
 
 //function that does main job
 int process(unsigned depth,unsigned width){
+	constantMap.insert(std::pair<std::string,content_type>(OPTION_DEPTH,depth));
 	assembly.reserve(depth);
 	comment_code.reserve(depth);
 	
@@ -460,19 +462,32 @@ int process(unsigned depth,unsigned width){
 			//check if the label is valid
 			if(isNameValid(arg1)){
 				auto iter_const=constantMap.find(arg1);
+				const std::string* optionNamePtr=nullptr;
 				if(iter_const!=constantMap.end()){
-					(io.error())<<"constant \""<<arg1<<"\" is already defined"<<std::endl;
-				}else{
+					//std::cerr<<"Debug: Name collision detected for "<<arg1<<std::endl;
+					if(arg1==OPTION_DEPTH){
+						optionNamePtr=&OPTION_DEPTH;
+						//std::cerr<<"Debug: Option "<<(*optionNamePtr)<<" is getting overwritten"<<std::endl;
+					}else{
+						(io.error())<<"constant \""<<arg1<<"\" is already defined"<<std::endl;
+					}
+				}
+				if((iter_const==constantMap.end())||(optionNamePtr!=nullptr)){
 					content_type value=0;
 					std::string label;
 					offset_type offset=0;
 					if(convert2Value_Expression(arg2,value,offset,label)&&label.empty()){
-						constantMap.insert(std::pair<std::string,content_type>(arg1,value));
+						if(optionNamePtr!=nullptr){
+							constantMap.at((*optionNamePtr))=value;
+							//std::cerr<<"Debug: "<<(*optionNamePtr)<<" changed to "<<value<<std::endl;
+						}else{
+							constantMap.insert(std::pair<std::string,content_type>(arg1,value));
 #ifdef INFO_SHOW_CONSTANT_WHEN_PARSED
-						(io.info())<<"constant \""<<arg1<<"\" = "<<value<<std::endl;
+							(io.info())<<"constant \""<<arg1<<"\" = "<<value<<std::endl;
 #endif
-						if(isThisAddressLabelled){
-							(io.warning())<<"constant definition after a label (do you want to hardcode it instead?)"<<std::endl;
+							if(isThisAddressLabelled){
+								(io.warning())<<"constant definition after a label (do you want to hardcode it instead?)"<<std::endl;
+							}
 						}
 					}else{
 						(io.error())<<"constant \""<<arg1<<"\" has invalid expression (\""<<arg2<<"\")"<<std::endl;
@@ -607,6 +622,8 @@ int process(unsigned depth,unsigned width){
 			}
 		}
 	}
+
+	depth=constantMap.at(OPTION_DEPTH);
 	
 	if(assembly.size()>depth){
 		(io.warning(IOManager::NoLineCount))<<std::dec<<"size of assembly ("<<assembly.size()<<") is greater than depth ("<<depth<<") can store!"<<std::endl;
@@ -751,11 +768,18 @@ int main(int argc, char** argv){
 			//get output fileName
 			std::size_t nameStart=fileName.find_last_of("\\/");
 			std::size_t suffixStart=fileName.find_last_of('.');
+			if((suffixStart!=std::string::npos)&&//if there is something like a suffix
+					(!((nameStart!=std::string::npos)&&(suffixStart<nameStart)))//if it is really a suffix (not sth like ../src)
+					){
+				fileName.erase(suffixStart);
+			}
+			/*
 			if(!((nameStart!=std::string::npos)
 					&&(suffixStart!=std::string::npos)
 					&&(suffixStart<nameStart))){
 				fileName.erase(suffixStart);
 			}
+			*/
 			fileName.append(".mif");
 			std::ofstream ofs(fileName);
 			if(ofs.good()){
