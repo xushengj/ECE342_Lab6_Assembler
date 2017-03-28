@@ -9,7 +9,7 @@ The processor supports following instructions:
 
 | Mnemonic, Argument1, Argument2 | Effect |
 | :--- | :--- |
-| mv   Rx, Ry	 | Rx=Ry |
+| mv   Rx, Ry    | Rx=Ry |
 | mvi  Rx, Imm16 | Rx=Imm16 |
 | add  Rx, Ry    | Rx+=Ry |
 | sub  Rx, Ry    | Rx-=Ry |
@@ -50,3 +50,6 @@ Also, check your processor implementation if you want to use something like `mvi
 
 Feel free to modify the program to fit your case. Thank you!
 
+EDIT:
+
+Now you can use it by supplying the file name as argument.

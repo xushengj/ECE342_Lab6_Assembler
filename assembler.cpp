@@ -17,6 +17,8 @@ Note:
 	1.	This program reads from stdin and write mif to stdout. Errors or other information goes to stderr.
 		Use redirection to read from / write to files.
 		
+		EDIT: now you can supply input fileName as argument. Output fileName will be in the same name with ".mif" suffix.
+		
 	2.	If the starting address of ROM is not zero (not the case if you follow lab6 suggestion),
 		please define a constant as the starting address and add it to all expressions with labels
 		e.g.	#define ROM_ADDRESS 0xf000
@@ -47,7 +49,7 @@ Note:
 #ifdef VERBOSE
 #define INFO_SHOW_LABEL_WHEN_PARSED
 #define INFO_SHOW_CONSTANT_WHEN_PARSED
-#define INFO_SHOW_ERRORCOUNT
+#define INFO_SHOW_COUNTS
 #endif
 
 //the field indicating definition of constants
@@ -66,6 +68,7 @@ Note:
 #include <iomanip>
 #include <string>
 #include <sstream>
+#include <fstream>
 #include <unordered_map>
 #include <vector>
 #include <locale>
@@ -77,8 +80,10 @@ Note:
 //constants
 const std::string WHITESPACE=" \t";
 
-typedef unsigned content_type;
-typedef int offset_type;
+using content_type=unsigned;
+using offset_type=int;
+//typedef unsigned content_type;
+//typedef int offset_type;
 
 constexpr content_type INSTR_MV		=0;
 constexpr content_type INSTR_MVI	=1;
@@ -148,7 +153,71 @@ std::unordered_map<
 		>
 > pendingLabelMap;//during the first pass, all dependency on labels will be stored here
 
-unsigned lineCount=1;
+class IOManager{
+private:
+	unsigned lineCount;
+	unsigned warningCount;
+	unsigned errorCount;
+public:
+	std::istream* inputSrc;//where do source come
+	std::ostream* outputDest;//where do mif go
+	std::ostream* problemDest;//where do warnings/errors/info go
+	
+	IOManager():
+			lineCount(0),
+			warningCount(0),
+			errorCount(0),
+			inputSrc(&std::cin),
+			outputDest(&std::cout),
+			problemDest(&std::cerr){
+	}
+	
+	void input_getline(std::string& dest){
+		std::getline((*inputSrc),dest);
+		++lineCount;
+	}
+	
+	bool input_good(){
+		return inputSrc->good();
+	}
+	
+	static constexpr bool NoLineCount=false;
+	
+	std::ostream& error(bool outputLineCount=true){
+		++errorCount;
+		(*problemDest)<<"Error: ";
+		if(outputLineCount) (*problemDest)<<"at line "<<lineCount<<": ";
+		return (*problemDest);
+	}
+	
+	std::ostream& warning(bool outputLineCount=true){
+		++warningCount;
+		(*problemDest)<<"Warning: ";
+		if(outputLineCount) (*problemDest)<<"at line "<<lineCount<<": ";
+		return (*problemDest);
+	}
+	
+	std::ostream& info(bool outputLineCount=true){
+		(*problemDest)<<"Info: ";
+		if(outputLineCount) (*problemDest)<<"at line "<<lineCount<<": ";
+		return (*problemDest);
+	}
+	
+	void showCounts(){
+		(*problemDest)<<"Output complete; "
+				<<errorCount<<" error(s) and "
+				<<warningCount<<" warning(s) in total"<<std::endl;
+	}
+	
+	bool isPauseNeeded(){
+		return (errorCount>0)||(warningCount>0);
+	}
+	
+	std::ostream& output(){
+		return (*outputDest);
+	}
+	
+}io;
 
 //check if a string is a valid symbol name
 //alphanumeric characters or underscore '_', and first character cannot be a number
@@ -206,7 +275,7 @@ bool convert2Value(const std::string& arg, content_type& result){
 	{
 		content_type tmp2=0;
 		if(convert2Reg(arg,tmp2)){
-			std::cerr<<"Warning: at line "<<lineCount<<": immediate expression \""<<arg<<"\" looks like a register"<<std::endl;
+			(io.warning())<<"immediate expression \""<<arg<<"\" looks like a register"<<std::endl;
 		}
 	}
 	content_type tmp=0;
@@ -291,7 +360,6 @@ bool convert2Value_Expression(const std::string& arg, content_type& result,offse
 	for(std::size_t i=0;i<=arg.length();++i){
 		if((arg[i]=='+')||(arg[i]=='-')||(i==arg.length())){
 			std::string subExpression=arg.substr(curSubExpressionStart,i-curSubExpressionStart);
-			//std::cerr<<"Debug: evaluating sub expression "<<subExpression<<",i="<<i<<std::endl;
 			curSubExpressionStart=i+1;
 			content_type curValue=0;
 			if(!(convert2Value(subExpression,curValue))){
@@ -322,15 +390,14 @@ bool convert2Value_Expression(const std::string& arg, content_type& result,offse
 //function that does main job
 int process(unsigned depth,unsigned width){
 	assembly.reserve(depth);
-	
-	unsigned errorCount=0;
+	comment_code.reserve(depth);
 	
 	//warning if a label is labeling a non-instruction (constants definition)
 	bool isThisAddressLabelled=false;
 	
-	for(lineCount=1;(std::cin.good());++lineCount){
+	while(io.input_good()){
 		std::string line;
-		std::getline(std::cin,line);
+		io.input_getline(line);
 		if(line.back()=='\n') line.pop_back();
 		if(line.back()=='\r') line.pop_back();
 		
@@ -349,20 +416,18 @@ int process(unsigned depth,unsigned width){
 			
 			//check if the label is valid
 			if(!(isNameValid(labelName))){
-				std::cerr<<"Error: at line "<<lineCount<<": invalid labelName \""<<labelName<<'"'<<std::endl;
-				++errorCount;
+				(io.error())<<"invalid labelName \""<<labelName<<'"'<<std::endl;
 			}else{
 				auto iter_label=labelMap.find(labelName);
 				if(iter_label!=labelMap.end()){
-					std::cerr<<"Error: at line "<<lineCount<<": label \""<<labelName<<"\" is already defined (value="<<iter_label->second<<')'<<std::endl;
-					++errorCount;
+					(io.error())<<"label \""<<labelName<<"\" is already defined (value="<<iter_label->second<<')'<<std::endl;
 				}else{
 					const std::pair<std::string,content_type> tmpPair(labelName,assembly.size());
 					labelMap.insert(tmpPair);
 					comment_label.push_back(tmpPair);
 					isThisAddressLabelled=true;
 #ifdef INFO_SHOW_LABEL_WHEN_PARSED
-					std::cerr<<"Info: at line "<<lineCount<<": label \""<<labelName<<"\" = "<<assembly.size()<<std::endl;
+					(io.info())<<"label \""<<labelName<<"\" = "<<assembly.size()<<std::endl;
 #endif
 				}
 			}
@@ -388,7 +453,7 @@ int process(unsigned depth,unsigned width){
 		instr=getLowerCase(instr);
 		
 		if(!(shouldBeEmpty.empty())){
-			std::cerr<<"Warning: at line "<<lineCount<<": everything after \""<<arg2<<"\" is ignored"<<std::endl;
+			(io.warning())<<"everything after \""<<arg2<<"\" is ignored"<<std::endl;
 		}
 		
 		if(instr==INSTR_DEFINE_CONSTANT){
@@ -396,8 +461,7 @@ int process(unsigned depth,unsigned width){
 			if(isNameValid(arg1)){
 				auto iter_const=constantMap.find(arg1);
 				if(iter_const!=constantMap.end()){
-					std::cerr<<"Error: at line "<<lineCount<<": constant \""<<arg1<<"\" is already defined"<<std::endl;
-					++errorCount;
+					(io.error())<<"constant \""<<arg1<<"\" is already defined"<<std::endl;
 				}else{
 					content_type value=0;
 					std::string label;
@@ -405,25 +469,22 @@ int process(unsigned depth,unsigned width){
 					if(convert2Value_Expression(arg2,value,offset,label)&&label.empty()){
 						constantMap.insert(std::pair<std::string,content_type>(arg1,value));
 #ifdef INFO_SHOW_CONSTANT_WHEN_PARSED
-						std::cerr<<"Info: at line "<<lineCount<<": constant \""<<arg1<<"\" = "<<value<<std::endl;
+						(io.info())<<"constant \""<<arg1<<"\" = "<<value<<std::endl;
 #endif
 						if(isThisAddressLabelled){
-							std::cerr<<"Warning: at line "<<lineCount<<": constant definition after a label"<<std::endl;
+							(io.warning())<<"constant definition after a label (do you want to hardcode it instead?)"<<std::endl;
 						}
 					}else{
-						std::cerr<<"Error: at line "<<lineCount<<": constant \""<<arg1<<"\" has invalid expression (\""<<arg2<<"\")"<<std::endl;
-						++errorCount;
+						(io.error())<<"constant \""<<arg1<<"\" has invalid expression (\""<<arg2<<"\")"<<std::endl;
 					}
 				}
 			}else{
-				std::cerr<<"Error: at line "<<lineCount<<": constant name \""<<arg1<<"\" is invalid"<<std::endl;
-				++errorCount;
+				(io.error())<<"constant name \""<<arg1<<"\" is invalid"<<std::endl;
 			}
 		}else{
 			auto iter_instr=OPCODE_MAP.find(instr);
 			if(iter_instr==OPCODE_MAP.end()){
-				std::cerr<<"Error: at line "<<lineCount<<": invalid opcode \""<<instr<<'"'<<std::endl;
-				++errorCount;
+				(io.error())<<"invalid opcode \""<<instr<<'"'<<std::endl;
 			}else{
 				std::string codeComment=instr;
 				codeComment+='\t';
@@ -452,11 +513,9 @@ int process(unsigned depth,unsigned width){
 														+(rx<<OFFSET_RX)
 														+(ry<<OFFSET_RY);
 							assembly.push_back(content);
-							//std::cerr<<"Debug: content="<<content<<std::endl;
 						}else{
 							assembly.push_back(PADD_NOOP);
-							std::cerr<<"Error: at line "<<lineCount<<": failed to interpret \""<<arg1<<"\" or \""<<arg2<<"\" as register"<<std::endl;
-							++errorCount;
+							(io.error())<<"failed to interpret \""<<arg1<<"\" or \""<<arg2<<"\" as register"<<std::endl;
 						}
 					}break;
 					case INSTR_MVI:
@@ -473,27 +532,9 @@ int process(unsigned depth,unsigned width){
 							unsigned long long content=((iter_instr->second)<<OFFSET_OPCODE)
 														+(rx<<OFFSET_RX);
 							assembly.push_back(content);
-							//std::cerr<<"Debug: content="<<content<<std::endl;
 							assembly.push_back(immediate);
-							//std::cerr<<"Debug: immediate="<<immediate<<std::endl;
-							/*
 							if(!immGood){
-								if(isNameValid(arg2)){
-									//add address of immediate to pendingLabelMap
-									auto iter_pend=pendingLabelMap.find(arg2);
-									if(iter_pend==pendingLabelMap.end()){
-										auto tmpPair=pendingLabelMap.insert(std::pair<std::string,std::vector<content_type>>(arg2,std::vector<content_type>()));
-										iter_pend=tmpPair.first;
-									}
-									iter_pend->second.push_back(assembly.size()-1);
-								}else{
-									std::cerr<<"Error: at line "<<lineCount<<": failed to interpret \""<<arg2<<"\" as value"<<std::endl;
-									++errorCount;
-								}
-							}*/
-							if(!immGood){
-								std::cerr<<"Error: at line "<<lineCount<<": failed to interpret \""<<arg2<<"\" as value"<<std::endl;
-								++errorCount;
+								(io.error())<<"failed to interpret \""<<arg2<<"\" as value"<<std::endl;
 							}else if(!(label.empty())){
 								auto iter_pend=pendingLabelMap.find(label);
 								if(iter_pend==pendingLabelMap.end()){
@@ -510,13 +551,12 @@ int process(unsigned depth,unsigned width){
 						}else{
 							assembly.push_back(PADD_NOOP);
 							assembly.push_back(PADD_NOOP);
-							std::cerr<<"Error: at line "<<lineCount<<": failed to interpret \""<<arg1<<"\" as register"<<std::endl;
-							++errorCount;
+							(io.error())<<"failed to interpret \""<<arg1<<"\" as register"<<std::endl;
 						}
 					}break;
 					case INSTR_DATA:{
 						if(!(arg2.empty())){
-							std::cerr<<"Warning: at line "<<lineCount<<": ignoring unexpected extra argument \""<<arg2<<'"'<<std::endl;
+							(io.warning())<<"ignoring unexpected extra argument \""<<arg2<<'"'<<std::endl;
 						}
 						content_type immediate=0;
 						offset_type offset=0;
@@ -524,8 +564,7 @@ int process(unsigned depth,unsigned width){
 						bool immGood=convert2Value_Expression(arg1,immediate,offset,label);
 						assembly.push_back(immediate);
 						if(!immGood){
-							std::cerr<<"Error: at line "<<lineCount<<": failed to interpret \""<<arg1<<"\" as value"<<std::endl;
-							++errorCount;
+							(io.error())<<"failed to interpret \""<<arg1<<"\" as value"<<std::endl;
 						}else if(!(label.empty())){
 							auto iter_pend=pendingLabelMap.find(label);
 							if(iter_pend==pendingLabelMap.end()){
@@ -542,8 +581,7 @@ int process(unsigned depth,unsigned width){
 					}break;
 					default:{
 						assembly.push_back(PADD_NOOP);
-						std::cerr<<"Error: at line "<<lineCount<<": opcode handling unimplemented"<<std::endl;
-						++errorCount;
+						(io.error())<<"opcode handling unimplemented"<<std::endl;
 					}break;
 				}
 				isThisAddressLabelled=false;
@@ -551,17 +589,18 @@ int process(unsigned depth,unsigned width){
 		}
 	}
 	if(isThisAddressLabelled){
-		std::cerr<<"Warning: EOF reached; the last label is not labeling any instruction"<<std::endl;
+		(io.warning(IOManager::NoLineCount))<<"EOF reached; the last label is not labeling any defined content"<<std::endl;
 	}
 	//start to resolve labels
 	for(auto iter=pendingLabelMap.begin();iter!=pendingLabelMap.end();++iter){
 		auto iter_label=labelMap.find(iter->first);
 		if(iter_label==labelMap.end()){
-			std::cerr<<"Error: when resolving labels: label \""<<iter->first<<"\" is not found\n\tNote: This label is evaluated at following address:\n"<<std::hex;
+			std::ostream& errorDest=(io.error(IOManager::NoLineCount));
+			errorDest<<"when resolving labels: label \""<<iter->first<<"\" is not found\n\tNote: This label is evaluated at following address:\n"<<std::hex;
 			for(auto iter_victim=iter->second.begin();iter_victim!=iter->second.end();++iter_victim){
-				std::cerr<<'\t'<<(iter_victim->first);
+				errorDest<<"\t0x"<<(iter_victim->first);
 			}
-			std::cerr<<std::endl;
+			errorDest<<std::endl;
 		}else{
 			for(auto iter_eval=iter->second.begin();iter_eval!=iter->second.end();++iter_eval){
 				assembly[iter_eval->first]=iter_label->second+iter_eval->second;
@@ -570,9 +609,9 @@ int process(unsigned depth,unsigned width){
 	}
 	
 	if(assembly.size()>depth){
-		std::cerr<<std::dec<<"Warning: size of assembly ("<<assembly.size()<<") is greater than depth ("<<depth<<") can store!"<<std::endl;
+		(io.warning(IOManager::NoLineCount))<<std::dec<<"size of assembly ("<<assembly.size()<<") is greater than depth ("<<depth<<") can store!"<<std::endl;
 		while(depth<assembly.size()) depth<<=1;
-		std::cerr<<"Info: depth changed to "<<depth<<std::endl;
+		(io.info(IOManager::NoLineCount))<<"depth changed to "<<depth<<std::endl;
 	}
 	
 	
@@ -585,59 +624,60 @@ int process(unsigned depth,unsigned width){
 	}
 	unsigned data_width=(width-1)/4+1;
 	
-	unsigned long long assembly_max=(1<<width)-1;
+	unsigned long long assembly_mask=(1<<width)-1;
 	
-	//std::cerr<<"Debug: address_width="<<address_width<<",data_width="<<data_width<<",assembly_max="<<assembly_max<<std::endl;
+	std::ostream& outputDest=io.output();
 	
 	//output constants and labels
 #ifdef OUTPUT_WRITE_SYMBOL_TABLE
-	std::cout<<"-- Constants: "<<constantMap.size()<<" in total\n";
+	outputDest<<"-- Constants: "<<constantMap.size()<<" in total\n";
 	for(auto iter_tmp=constantMap.begin();iter_tmp!=constantMap.end();++iter_tmp){
-		std::cout<<"--\t"<<iter_tmp->first<<'\t'<<std::dec<<iter_tmp->second<<"\t0x"<<std::hex<<std::nouppercase<<iter_tmp->second<<'\n';
+		outputDest<<"--\t"<<iter_tmp->first<<'\t'<<std::dec<<iter_tmp->second<<"\t0x"<<std::hex<<std::nouppercase<<iter_tmp->second<<'\n';
 	}
-	std::cout<<"-- Labels: "<<labelMap.size()<<" in total\n";
+	outputDest<<"-- Labels: "<<labelMap.size()<<" in total\n";
 	std::multimap<content_type,std::string> tmpLabelMap;//sort my increasing address
 	for(auto iter_tmp=labelMap.begin();iter_tmp!=labelMap.end();++iter_tmp){
 		tmpLabelMap.insert(std::pair<content_type,std::string>(iter_tmp->second,iter_tmp->first));
 	}
 	for(auto iter_tmp=tmpLabelMap.begin();iter_tmp!=tmpLabelMap.end();++iter_tmp){
-		std::cout<<"--\t"<<iter_tmp->second<<"\t0x"<<std::hex<<std::nouppercase<<iter_tmp->first<<'\n';
+		outputDest<<"--\t"<<iter_tmp->second<<"\t0x"<<std::hex<<std::nouppercase<<iter_tmp->first<<'\n';
 	}
-	std::cout<<'\n';
+	outputDest<<'\n';
 #endif
 
-	std::cout<<"DEPTH = "<<depth
+	outputDest<<"DEPTH = "<<depth
 			<<";\nWIDTH = "<<width
 			<<";\nADDRESS_RADIX = HEX;\nDATA_RADIX = HEX;\nCONTENT\nBEGIN\n";
 	
-	std::cout<<std::hex<<std::setfill('0')<<std::uppercase;
-	bool isOversizeNotReported=true;
+	outputDest<<std::hex<<std::setfill('0')<<std::uppercase;
+	//bool isOversizeNotReported=true;
 	auto iter_labelComment=comment_label.begin();
 	for(std::size_t i=0;i<assembly.size();++i){
 		while((iter_labelComment!=comment_label.end())&&(iter_labelComment->second==i)){
-			std::cout<<"-- Label \""<<iter_labelComment->first<<"\":\n";
+			outputDest<<"-- Label \""<<iter_labelComment->first<<"\":\n";
 			++iter_labelComment;
 		}
-		std::cout<<std::setw(address_width)<<i<<"\t:\t"<<std::setw(data_width)<<(assembly_max&(assembly[i]))<<';';
+		outputDest<<std::setw(address_width)<<i<<"\t:\t"<<std::setw(data_width)<<(assembly_mask&(assembly[i]))<<';';
 		if(!(comment_code[i].empty())){
-			std::cout<<"\t-- "<<comment_code[i];
+			outputDest<<"\t-- "<<comment_code[i];
 		}
-		std::cout<<'\n';
+		outputDest<<'\n';
 	}
 #ifdef OUTPUT_ZERO_FILL
 	if((depth-assembly.size())==1){
-		std::cout<<std::setw(address_width)<<assembly.size()<<"\t:\t"<<std::setw(data_width)<<PADD_NOOP<<";\n";
-	}else{
-		std::cout<<'['<<std::setw(address_width)<<assembly.size()<<".."<<std::setw(address_width)<<depth-1<<"]\t:\t"<<std::setw(data_width)<<PADD_NOOP<<";\n";
+		outputDest<<std::setw(address_width)<<assembly.size()<<"\t:\t"<<std::setw(data_width)<<PADD_NOOP<<";\n";
+	}else if((depth-assembly.size())>1){
+		outputDest<<'['<<std::setw(address_width)<<assembly.size()<<".."<<std::setw(address_width)<<depth-1<<"]\t:\t"<<std::setw(data_width)<<PADD_NOOP<<";\n";
 	}
 #endif
-	std::cout<<"END;"<<std::endl;
-#ifdef INFO_SHOW_ERRORCOUNT
-	std::cerr<<"Output complete; "<<errorCount<<" error(s) in total"<<std::endl;
+	outputDest<<"END;"<<std::endl;
+#ifdef INFO_SHOW_COUNTS
+	io.showCounts();
 #endif
 	return 0;
 }
 
+/*
 int main(int argc, char** argv){
 	if(argc>2){
 		std::cerr<<"Error: Too many arguments; only an optional DEPTH argument is needed"<<std::endl;
@@ -649,14 +689,6 @@ int main(int argc, char** argv){
 	
 	if(argc==2){
 		std::string arg_depth(argv[1]);
-		//std::stoul sometimes do not work with MinGW on Windows
-		/*
-		try{
-			depth=std::stoul(arg_depth,nullptr);
-		}catch(...){
-			std::cerr<<"Error: invalid DEPTH argument"<<std::endl;
-			return 0;
-		}*/
 		std::stringstream buf(arg_depth);
 		buf>>depth;
 		if(buf.fail()){
@@ -666,4 +698,87 @@ int main(int argc, char** argv){
 	}
 	
 	return process(depth,width);
+}
+*/
+int main(int argc, char** argv){
+	unsigned depth=128;
+	unsigned width=16;
+	bool isUsingFile=false;
+	std::string fileName;
+	
+	if(argc>1){
+		std::string arguments(argv[1]);
+		for(int i=2;i<argc;++i){
+			arguments.append(1,' ');
+			arguments.append(argv[i]);
+		}
+		
+		std::stringstream args(arguments);
+		
+		//test if optional DEPTH is inputted
+		{
+			unsigned tmpDepth=0;
+			args>>tmpDepth;
+			if(args.fail()){
+				args.clear();
+			}else{
+				depth=tmpDepth;
+			}
+		}
+		
+		//test if the source is a file
+		{
+			args>>fileName;
+			if(args.fail()){
+				args.clear();
+			}else{
+				isUsingFile=true;
+			}
+		}
+		
+		//Error if there are too many arguments
+		std::string shouldBeEmpty;
+		args>>shouldBeEmpty;
+		if(!(shouldBeEmpty.empty())){
+			std::cerr<<"Error: Too many arguments; Only an optional DEPTH argument and / or an optional fileName are expected."<<std::endl;
+			return 0;
+		}
+	}
+	
+	if(isUsingFile){
+		std::ifstream ifs(fileName);
+		if(ifs.good()){
+			//get output fileName
+			std::size_t nameStart=fileName.find_last_of("\\/");
+			std::size_t suffixStart=fileName.find_last_of('.');
+			if(!((nameStart!=std::string::npos)
+					&&(suffixStart!=std::string::npos)
+					&&(suffixStart<nameStart))){
+				fileName.erase(suffixStart);
+			}
+			fileName.append(".mif");
+			std::ofstream ofs(fileName);
+			if(ofs.good()){
+				io.inputSrc=&ifs;
+				io.outputDest=&ofs;
+				process(depth,width);
+				if(io.isPauseNeeded()){
+					ifs.close();
+					ofs.close();
+					std::cerr<<"Press any key to exit..."<<std::flush;
+					std::cin.get();
+					return 0;
+				}
+			}else{
+				ifs.close();
+				std::cerr<<"Error: failed to write to "<<fileName<<std::endl;
+				return 0;
+			}
+		}else{
+			std::cerr<<"Error: failed to read from "<<fileName<<std::endl;
+			return 0;
+		}
+	}else{
+		return process(depth,width);
+	}
 }
