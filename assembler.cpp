@@ -352,6 +352,7 @@ bool convert2Value(const std::string& arg, content_type& result){
 //if the expression has no label, then only result will be set
 //if the expression has label, then offset and label will be set
 //also, you cannot subtract a value by a label
+/*
 bool convert2Value_Expression(const std::string& arg, content_type& result,offset_type& offset, std::string& label){
 	offset_type tmpOffset=0;
 	std::string unresolvedLabel;
@@ -386,6 +387,155 @@ bool convert2Value_Expression(const std::string& arg, content_type& result,offse
 		label=unresolvedLabel;
 	}
 	return true;
+}
+*/
+//http://stackoverflow.com/questions/13421424/how-to-evaluate-an-infix-expression-in-just-one-scan-using-stacks
+bool convert2Value_Expression(const std::string& arg, content_type& result,offset_type& offset, std::string& label){
+	const std::string operatorString="(+-*/)";
+	constexpr std::size_t BR_LEFT=0;
+	constexpr std::size_t OP_ADD=1;
+	constexpr std::size_t OP_SUB=2;
+	constexpr std::size_t OP_MUL=3;
+	constexpr std::size_t OP_DIV=4;
+	constexpr std::size_t BR_RIGHT=5;
+	//make sure constants are the index of the operator in operatorString
+	const std::vector<unsigned> precedence={
+		0,//BR_LEFT
+		1,//OP_ADD
+		1,//OP_SUB
+		2,//OP_MUL
+		2,//OP_DIV
+		0//BR_RIGHT(it will never appear on the stack)
+	};
+		
+	if(arg.empty()) return false;
+	
+	std::size_t labelIndexPlusOne=0;//zero if no label
+	std::string tmplabel;
+	std::vector<offset_type> operandStack;//for the operand with label: the value stored is the offset (only add and subtract is allowed for labels)
+	std::vector<std::size_t> operatorStack;
+	
+	operatorStack.push_back(BR_LEFT);
+	std::size_t expressionStart=0;
+	bool isRightAfterRightParenthesis=false;
+	while(true){
+		const std::size_t i=arg.find_first_of(operatorString,expressionStart);
+		std::size_t opValue=BR_RIGHT;
+		if(i!=std::string::npos){
+			opValue=operatorString.find_first_of(arg[i]);
+			if(((expressionStart==i)&&(opValue!=BR_LEFT)&&(!isRightAfterRightParenthesis))//no first operand for this operator
+					||((expressionStart<i)&&(opValue==BR_LEFT))//an operand before left parenthesis
+					||((expressionStart<i)&&isRightAfterRightParenthesis)//expression directly after right parenthesis
+					){
+				//(io.warning())<<"Debug: error at left of operator; expressionStart="<<expressionStart<<", i="<<i<<", opValue="<<opValue<<std::endl;
+				return false;
+			}
+		}else{
+			if((expressionStart==arg.length())&&(!isRightAfterRightParenthesis)){//operator or '(' at end of expression
+				//(io.warning())<<"Debug: error at end of expression; expressionStart="<<expressionStart<<", i="<<i<<", opValue="<<opValue<<std::endl;
+				return false;
+			}
+		}
+		if(((i==std::string::npos)&&(expressionStart<arg.length()))||((i!=std::string::npos)&&(expressionStart<i))){//there is something to evaluate
+			std::string tmpExpression;
+			if(i==std::string::npos){
+				tmpExpression=arg.substr(expressionStart);
+			}else{
+				tmpExpression=arg.substr(expressionStart,i-expressionStart);
+			}
+			content_type tmpResult=0;
+			if(convert2Value(tmpExpression,tmpResult)){
+				operandStack.push_back(static_cast<offset_type>(tmpResult));
+			}else{
+				if((labelIndexPlusOne==0)&&(isNameValid(tmpExpression))){
+					operandStack.push_back(0);//initialize the offset of label to zero
+					labelIndexPlusOne=operandStack.size();
+					tmplabel.swap(tmpExpression);
+				}else{
+					//(io.warning())<<"Debug: error: multiple label; arg.length()="<<arg.length()<<", i="<<i<<", expressionStart="<<expressionStart<<", label:("<<tmplabel<<","<<tmpExpression<<')'<<std::endl;
+					return false;
+				}
+			}
+		}
+		expressionStart=i+1;
+		if(opValue==BR_LEFT){
+			operatorStack.push_back(opValue);
+		}else{
+			while((!(operatorStack.empty()))&&(operatorStack.back()!=BR_LEFT)&&(precedence[operatorStack.back()]>=precedence[opValue])){
+				if(operandStack.size()<2){
+					//(io.warning())<<"Debug: insufficient operand ("<<operandStack.size()<<") for operator "<<operatorStack.back()<<std::endl;
+					return false;
+				}
+				offset_type operand2=operandStack.back();
+				operandStack.pop_back();
+				offset_type operand1=operandStack.back();
+				operandStack.pop_back();
+				if(labelIndexPlusOne>operandStack.size()){
+					//one of the operand is the offset from label
+					if(!((operatorStack.back()==OP_ADD)||((operatorStack.back()==OP_SUB)&&(labelIndexPlusOne-1==operandStack.size())))){
+						//(io.warning())<<"Debug: misuse of label; expressionStart="<<expressionStart<<", i="<<i<<", opValue="<<opValue<<std::endl;
+						return false;//only addition and subtraction is allowed for label. For subtraction, the label must be the first operand
+					}else{
+						offset_type tmpResult=operand1;
+						if(operatorStack.back()==OP_ADD){
+							tmpResult+=operand2;
+						}else{
+							tmpResult-=operand2;
+						}
+						operandStack.push_back(tmpResult);
+						labelIndexPlusOne=operandStack.size();
+					}
+				}else{
+					//two pure number
+					offset_type tmpResult=operand1;
+					switch(operatorStack.back()){
+						case OP_ADD:
+							tmpResult+=operand2;
+							break;
+						case OP_SUB:
+							tmpResult-=operand2;
+							break;
+						case OP_MUL:
+							tmpResult*=operand2;
+							break;
+						case OP_DIV:
+							tmpResult/=operand2;
+							break;
+						default:
+							(io.error())<<"Unhandled operator. Please report this bug."<<std::endl;
+							return false;
+					}
+					operandStack.push_back(tmpResult);
+				}
+				operatorStack.pop_back();
+			}
+			if(opValue==BR_RIGHT){
+				if((operatorStack.empty())||(operatorStack.back()!=BR_LEFT)){
+					//(io.warning())<<"Debug: No matching '(' for ')'"<<std::endl;
+					return false;
+				}else{
+					operatorStack.pop_back();
+					isRightAfterRightParenthesis=true;
+				}
+			}else{
+				operatorStack.push_back(opValue);
+				isRightAfterRightParenthesis=false;
+			}
+		}
+		if(i==std::string::npos)break;
+	}
+	if((!(operatorStack.empty()))||(operandStack.size()!=1)){
+		//(io.warning())<<"Debug: stack is not as expected at end of execution"<<std::endl;
+		return false;
+	}else{
+		if(tmplabel.empty()){
+			result=static_cast<content_type>(operandStack.back());
+		}else{
+			label.swap(tmplabel);
+			offset=operandStack.back();
+		}
+		return true;
+	}
 }
 
 //function that does main job
@@ -579,7 +729,7 @@ int process(unsigned depth,unsigned width){
 						bool immGood=convert2Value_Expression(arg1,immediate,offset,label);
 						assembly.push_back(immediate);
 						if(!immGood){
-							(io.error())<<"failed to interpret \""<<arg1<<"\" as value"<<std::endl;
+							(io.error())<<"failed to interpret \""<<arg1<<"\" as immediate value"<<std::endl;
 						}else if(!(label.empty())){
 							auto iter_pend=pendingLabelMap.find(label);
 							if(iter_pend==pendingLabelMap.end()){
