@@ -3,15 +3,14 @@
 /*
 ECE342 Lab6 Assembler
 command line argument: optional DEPTH (number of words in total); optional inputFileName
-width is hardcoded to be 16
 encoding is hardcoded according to lab6 document; IR is assumed to use upper 9 bits from DIN
 
 Features:
 	able to define constants using "#define name value"
 	able to hardcode data using "#data value"
 	support single line comments (starting with "//")
-	support for labels (value is the address of next instructions)
-	support addition and subtraction when evaluating expressions (for mvi)
+	support for labels (value is the address of next instructions/data)
+	support addition and subtraction (EDIT: arithmetic expressions (+,-,*,/,paranthesis) when evaluating expressions
 
 Note:
 	1.	This program reads from stdin and write mif to stdout. Errors or other information goes to stderr.
@@ -25,9 +24,10 @@ Note:
 				LABEL_START:
 				mvi pc, LABEL_START+ROM_ADDRESS
 				
-	3.	Please do not put whitespace inside one expression; everything after the third field will be discarded
+	3.	NO LONGER TRUE!!! Please do not put whitespace inside one expression; everything after the third field will be discarded
 		e.g.	don't write: "mvi R0, Constant1+ Constant2", which becomes "mvi R0, Constant1+" and gives you error
 				write it as: "mvi R0, Constant1+Constant2"
+		EDIT: now fields will be concatenated before evaluation
 	
 	4.	All ',' will be substituted by whitespace before analyzing the instruction.
 		You can use comma or any whitespace to split fields
@@ -82,8 +82,6 @@ const std::string WHITESPACE=" \t";
 
 using content_type=unsigned;
 using offset_type=int;
-//typedef unsigned content_type;
-//typedef int offset_type;
 
 constexpr content_type INSTR_MV		=0;
 constexpr content_type INSTR_MVI	=1;
@@ -95,18 +93,18 @@ constexpr content_type INSTR_MVNZ	=6;
 
 constexpr content_type INSTR_DATA	=8;//used to hardcode data in ROM
 
-constexpr unsigned OFFSET_RIGHT_PADDING		=7;
-constexpr unsigned OFFSET_OPCODE			=OFFSET_RIGHT_PADDING+6;
-constexpr unsigned OFFSET_RX				=OFFSET_RIGHT_PADDING+3;
-constexpr unsigned OFFSET_RY				=OFFSET_RIGHT_PADDING;
+//they are not constants any more..
+unsigned OFFSET_RIGHT_PADDING	=7;
+unsigned OFFSET_OPCODE			=OFFSET_RIGHT_PADDING+6;
+unsigned OFFSET_RX				=OFFSET_RIGHT_PADDING+3;
+unsigned OFFSET_RY				=OFFSET_RIGHT_PADDING;
 
 constexpr unsigned long long PADD_NOOP=0;
 
 const std::string INSTR_DEFINE_CONSTANT=INSTR_DEFINE_CONSTANT_STR;
-const std::string OPTION_DEPTH="__DEPTH__";
 
 const std::unordered_map<std::string,content_type> OPCODE_MAP={
-		{"#data",INSTR_DATA},//use it if you want to store constants in ROM
+		{"#data",INSTR_DATA},//use it if you want to hardcode something
 		{"mv",INSTR_MV},
 		{"mvi",INSTR_MVI},
 		{"add",INSTR_ADD},
@@ -125,6 +123,22 @@ const std::unordered_map<std::string,content_type> registerMap={
 		{"r6",6},
 		{"r7",7},
 		{"pc",7}
+};
+
+//define these constants to overwrite options
+//you should put them before all instruction/data. Otherwise the result may not be correct
+const std::string OPTION_DEPTH="__DEPTH__";
+const std::string OPTION_WIDTH="__WIDTH__";
+const std::string OPTION_IsByteAddressing="__IsByteAddressing__";
+const std::string OPTION_IsOffsetCorrectionNeeded="__IsOffsetCorrectionNeeded__";
+const std::string OPTION_IROffset="__IROffset__";
+
+const std::vector<std::pair<std::string,content_type>> optionVec={//name, default value
+	{OPTION_DEPTH,128},//How many words in this memory
+	{OPTION_WIDTH,16},//how many bits in a word (assume it is the same for both memory and processor)
+	{OPTION_IsByteAddressing,0},//non_zero value: labels (but not offset) will be automatically multiplied by (__WIDTH__/8)
+	{OPTION_IsOffsetCorrectionNeeded,0},//non_zero value: offsets of labels will be automatically multiplied by (__WIDTH__/8). Disabled when __IsByteAddressing__ is zero.
+	{OPTION_IROffset,7}//will be adjusted to (__WIDTH__-9) when __WIDTH__ get changed (change this after __WIDTH__ if you are not using highest 9 bits for IR)
 };
 
 //global variables
@@ -348,7 +362,7 @@ bool convert2Value(const std::string& arg, content_type& result){
 	}
 }
 
-//evaluate expression, and supports simple arithmetic expression (add and sub)
+//evaluate expression, and supports simple arithmetic expression
 //if the expression has no label, then only result will be set
 //if the expression has label, then offset and label will be set
 //also, you cannot subtract a value by a label
@@ -540,7 +554,9 @@ bool convert2Value_Expression(const std::string& arg, content_type& result,offse
 
 //function that does main job
 int process(unsigned depth,unsigned width){
-	constantMap.insert(std::pair<std::string,content_type>(OPTION_DEPTH,depth));
+	for(auto iter_option=optionVec.begin();iter_option!=optionVec.end();++iter_option){
+		constantMap.insert((*iter_option));
+	}
 	assembly.reserve(depth);
 	comment_code.reserve(depth);
 	
@@ -604,32 +620,57 @@ int process(unsigned depth,unsigned width){
 		lineBuffer>>instr>>arg1>>arg2>>shouldBeEmpty;
 		instr=getLowerCase(instr);
 		
+		/*
 		if(!(shouldBeEmpty.empty())){
 			(io.warning())<<"everything after \""<<arg2<<"\" is ignored"<<std::endl;
+		}
+		*/
+		while(!(shouldBeEmpty.empty())){
+			arg2.append(shouldBeEmpty);
+			shouldBeEmpty.clear();
+			lineBuffer>>shouldBeEmpty;
 		}
 		
 		if(instr==INSTR_DEFINE_CONSTANT){
 			//check if the label is valid
 			if(isNameValid(arg1)){
 				auto iter_const=constantMap.find(arg1);
-				const std::string* optionNamePtr=nullptr;
+				auto iter_option=optionVec.end();
 				if(iter_const!=constantMap.end()){
-					//std::cerr<<"Debug: Name collision detected for "<<arg1<<std::endl;
-					if(arg1==OPTION_DEPTH){
-						optionNamePtr=&OPTION_DEPTH;
-						//std::cerr<<"Debug: Option "<<(*optionNamePtr)<<" is getting overwritten"<<std::endl;
-					}else{
+					for(iter_option=optionVec.begin();iter_option!=optionVec.end();++iter_option){
+						if(iter_option->first==arg1) break;
+					}
+					if(iter_option==optionVec.end()){
 						(io.error())<<"constant \""<<arg1<<"\" is already defined"<<std::endl;
 					}
 				}
-				if((iter_const==constantMap.end())||(optionNamePtr!=nullptr)){
+				if((iter_const==constantMap.end())||(iter_option!=optionVec.end())){
 					content_type value=0;
 					std::string label;
 					offset_type offset=0;
 					if(convert2Value_Expression(arg2,value,offset,label)&&label.empty()){
-						if(optionNamePtr!=nullptr){
-							constantMap.at((*optionNamePtr))=value;
-							//std::cerr<<"Debug: "<<(*optionNamePtr)<<" changed to "<<value<<std::endl;
+						if(iter_option!=optionVec.end()){
+							constantMap.at(iter_option->first)=value;
+							if((!(assembly.empty()))){
+								(io.warning())<<"Option \""<<iter_option->first<<"\" should be specified before instructions or data"<<std::endl;
+							}
+							//side effects
+							if(iter_option->first==OPTION_WIDTH){
+								if(value<9){
+									(io.error())<<"Specified width ("<<value<<") is too small"<<std::endl;
+								}else{
+									constantMap.at(OPTION_IROffset)=value-9;
+									OFFSET_RIGHT_PADDING=value-9;
+									OFFSET_OPCODE=OFFSET_RIGHT_PADDING+6;
+									OFFSET_RX=OFFSET_RIGHT_PADDING+3;
+									OFFSET_RY=OFFSET_RIGHT_PADDING;
+								}
+							}else if(iter_option->first==OPTION_IROffset){
+								OFFSET_RIGHT_PADDING=value;
+								OFFSET_OPCODE=OFFSET_RIGHT_PADDING+6;
+								OFFSET_RX=OFFSET_RIGHT_PADDING+3;
+								OFFSET_RY=OFFSET_RIGHT_PADDING;
+							}
 						}else{
 							constantMap.insert(std::pair<std::string,content_type>(arg1,value));
 #ifdef INFO_SHOW_CONSTANT_WHEN_PARSED
@@ -649,12 +690,14 @@ int process(unsigned depth,unsigned width){
 		}else{
 			auto iter_instr=OPCODE_MAP.find(instr);
 			if(iter_instr==OPCODE_MAP.end()){
-				(io.error())<<"invalid opcode \""<<instr<<'"'<<std::endl;
+				(io.error())<<"invalid mnemonic \""<<instr<<'"'<<std::endl;
 			}else{
 				std::string codeComment=instr;
 				codeComment+='\t';
 				codeComment+=arg1;
-				if(!(arg2.empty())){
+				if(iter_instr->second==INSTR_DATA){
+					codeComment+=arg2;
+				}else if(!(arg2.empty())){
 					codeComment+=",\t";
 					codeComment+=arg2;
 				}
@@ -721,7 +764,8 @@ int process(unsigned depth,unsigned width){
 					}break;
 					case INSTR_DATA:{
 						if(!(arg2.empty())){
-							(io.warning())<<"ignoring unexpected extra argument \""<<arg2<<'"'<<std::endl;
+							//(io.warning())<<"ignoring unexpected extra argument \""<<arg2<<'"'<<std::endl;
+							arg1.append(arg2);
 						}
 						content_type immediate=0;
 						offset_type offset=0;
@@ -756,31 +800,11 @@ int process(unsigned depth,unsigned width){
 	if(isThisAddressLabelled){
 		(io.warning(IOManager::NoLineCount))<<"EOF reached; the last label is not labeling any defined content"<<std::endl;
 	}
-	//start to resolve labels
-	for(auto iter=pendingLabelMap.begin();iter!=pendingLabelMap.end();++iter){
-		auto iter_label=labelMap.find(iter->first);
-		if(iter_label==labelMap.end()){
-			std::ostream& errorDest=(io.error(IOManager::NoLineCount));
-			errorDest<<"when resolving labels: label \""<<iter->first<<"\" is not found\n\tNote: This label is evaluated at following address:\n"<<std::hex;
-			for(auto iter_victim=iter->second.begin();iter_victim!=iter->second.end();++iter_victim){
-				errorDest<<"\t0x"<<(iter_victim->first);
-			}
-			errorDest<<std::endl;
-		}else{
-			for(auto iter_eval=iter->second.begin();iter_eval!=iter->second.end();++iter_eval){
-				assembly[iter_eval->first]=iter_label->second+iter_eval->second;
-			}
-		}
-	}
-
+	
 	depth=constantMap.at(OPTION_DEPTH);
-	
-	if(assembly.size()>depth){
-		(io.warning(IOManager::NoLineCount))<<std::dec<<"size of assembly ("<<assembly.size()<<") is greater than depth ("<<depth<<") can store!"<<std::endl;
-		while(depth<assembly.size()) depth<<=1;
-		(io.info(IOManager::NoLineCount))<<"depth changed to "<<depth<<std::endl;
-	}
-	
+	width=constantMap.at(OPTION_WIDTH);
+	bool isAddressNeedAdjustment=(constantMap.at(OPTION_IsByteAddressing)!=0);
+	bool isOffsetNeedAdjustment=isAddressNeedAdjustment&&(constantMap.at(OPTION_IsOffsetCorrectionNeeded));
 	
 	//write mif file
 	unsigned address_width=1;
@@ -790,9 +814,58 @@ int process(unsigned depth,unsigned width){
 		tmp_depth>>=4;
 	}
 	unsigned data_width=(width-1)/4+1;
-	
 	unsigned long long assembly_mask=(1<<width)-1;
+	if(assembly_mask==0){//when unsigned long long is not long enough
+		assembly_mask=-1;
+	}
+	if(assembly.size()>depth){
+		(io.warning(IOManager::NoLineCount))<<std::dec<<"size of assembly ("<<std::dec<<assembly.size()<<") is greater than depth ("<<depth<<") can store!"<<std::endl;
+		while(depth<assembly.size()) depth<<=1;
+		(io.info(IOManager::NoLineCount))<<"depth changed to "<<depth<<std::endl;
+	}
 	
+	//start to resolve labels
+	for(auto iter=pendingLabelMap.begin();iter!=pendingLabelMap.end();++iter){
+		auto iter_label=labelMap.find(iter->first);
+		if(iter_label==labelMap.end()){
+			std::ostream& errorDest=(io.error(IOManager::NoLineCount));
+			errorDest<<"when resolving labels: label \""<<iter->first<<"\" is not found\n\tNote: This label is evaluated at following (word) address:\n"<<std::hex;
+			for(auto iter_victim=iter->second.begin();iter_victim!=iter->second.end();++iter_victim){
+				errorDest<<"\t0x"<<(iter_victim->first);
+			}
+			errorDest<<std::endl;
+		}else{
+			content_type labelBaseAddress=iter_label->second;
+			if(isAddressNeedAdjustment) labelBaseAddress*=(width/8);
+			for(auto iter_eval=iter->second.begin();iter_eval!=iter->second.end();++iter_eval){
+				offset_type offset=iter_eval->second;
+				if(isOffsetNeedAdjustment) offset*=(width/8);
+				assembly[iter_eval->first]=labelBaseAddress+offset;
+				if(isAddressNeedAdjustment){
+					if(assembly[iter_eval->first]>=(depth*width/8)){
+						(io.warning(IOManager::NoLineCount))<<std::setfill('0')
+								<<"expression with label at (word) address 0x"<<std::hex<<std::nouppercase<<std::setw(address_width)<<iter_eval->first
+								<<" evaluates to (byte address) 0x"<<std::setw(data_width)<<assembly[iter_eval->first]<<std::dec
+								<<", which is not in address range of this memory (0 - 0x"<<std::setw(address_width)<<(depth*width/8)-1<<')'
+								<<std::dec<<std::endl;
+					}
+					if(offset%(width/8)!=0){
+						(io.warning(IOManager::NoLineCount))<<std::setfill('0')
+								<<"expression with label at (word) address 0x"<<std::hex<<std::nouppercase<<std::setw(address_width)<<iter_eval->first
+								<<" has unaligned offset ("<<offset<<')'<<std::endl;
+					}
+				}else{
+					if(assembly[iter_eval->first]>=depth){
+						(io.warning(IOManager::NoLineCount))<<std::setfill('0')
+								<<"expression with label at address 0x"<<std::hex<<std::nouppercase<<std::setw(address_width)<<iter_eval->first
+								<<" evaluates to 0x"<<std::setw(data_width)<<assembly[iter_eval->first]
+								<<", which is not in address range of this memory (0 - 0x"<<std::setw(address_width)<<depth-1<<')'
+								<<std::dec<<std::endl;
+					}
+				}
+			}
+		}
+	}
 	std::ostream& outputDest=io.output();
 	
 	//output constants and labels
@@ -844,29 +917,6 @@ int process(unsigned depth,unsigned width){
 	return 0;
 }
 
-/*
-int main(int argc, char** argv){
-	if(argc>2){
-		std::cerr<<"Error: Too many arguments; only an optional DEPTH argument is needed"<<std::endl;
-		return 0;
-	}
-	
-	unsigned depth=128;
-	unsigned width=16;
-	
-	if(argc==2){
-		std::string arg_depth(argv[1]);
-		std::stringstream buf(arg_depth);
-		buf>>depth;
-		if(buf.fail()){
-			std::cerr<<"Error: invalid DEPTH argument"<<std::endl;
-			return 0;
-		}
-	}
-	
-	return process(depth,width);
-}
-*/
 int main(int argc, char** argv){
 	unsigned depth=128;
 	unsigned width=16;
@@ -923,13 +973,6 @@ int main(int argc, char** argv){
 					){
 				fileName.erase(suffixStart);
 			}
-			/*
-			if(!((nameStart!=std::string::npos)
-					&&(suffixStart!=std::string::npos)
-					&&(suffixStart<nameStart))){
-				fileName.erase(suffixStart);
-			}
-			*/
 			fileName.append(".mif");
 			std::ofstream ofs(fileName);
 			if(ofs.good()){
